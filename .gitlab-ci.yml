@@ -59,6 +59,8 @@ deploy:staging:
   needs:
     - build:staging
   environment: staging
+  variables:
+    CLOUDFLARE_BRANCH: "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH' 
       when: manual
