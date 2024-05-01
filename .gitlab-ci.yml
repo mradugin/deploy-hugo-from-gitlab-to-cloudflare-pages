@@ -1,6 +1,12 @@
+stages:
+  - build
+  - deploy
+  - cleanup
+
 variables:
   GIT_SUBMODULE_STRATEGY: recursive
   CLOUDFLARE_PROJECT_NAME: "pages-for-article"
+  HUGO_PRODUCTION_BASE_URL: "https://pages-for-article.pages.dev"
 
 workflow:
   rules:
@@ -13,7 +19,9 @@ workflow:
       when: never
     # Always run every commit on default branch that does not have a tag
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG !~ /^./'
- 
+      # Always run on schedule
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
 .build:
   image: alpine:latest
   stage: build
@@ -25,18 +33,22 @@ workflow:
         - "public"
     expire_in: 2 days
     when: always
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: always
 
-build:staging:
+build:preview:
   extends: 
     - .build
   script:
-    - hugo --buildDrafts
+    - hugo --buildDrafts 
 
 build:production:
   extends: 
     - .build
   script:
-    - hugo 
+    - hugo --baseURL "${HUGO_PRODUCTION_BASE_URL}"
 
 .deploy:
   image: node:18-alpine
@@ -53,15 +65,17 @@ build:production:
       --commit-message "$CLOUDFLARE_COMMIT_MESSAGE" \
       --commit-dirty false
 
-deploy:staging:
+deploy:preview:
   extends: 
     - .deploy
   needs:
-    - build:staging
+    - build:preview
   environment: staging
   variables:
     CLOUDFLARE_BRANCH: "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
   rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH' 
       when: manual
       variables:
@@ -78,6 +92,8 @@ deploy:production:
     - build:production
   environment: production
   rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
       when: manual
     - if: '$CI_COMMIT_TAG' 
@@ -88,3 +104,27 @@ deploy:production:
         CLOUDFLARE_BRANCH: "$CI_DEFAULT_BRANCH"
         CLOUDFLARE_COMMIT_MESSAGE: "$CI_COMMIT_TAG - $CI_COMMIT_TAG_MESSAGE"
     - when: never
+
+.cleanup:
+  image: python:3.11-alpine
+  stage: cleanup
+  variables:
+    CLEANUP_KEEP_DAYS: 7
+  before_script:
+    - pip install requests python-dateutil
+  script:
+    - python scripts/cleanup-deployments.py --environment ${CLEANUP_ENVIRONMENT} --days ${CLEANUP_KEEP_DAYS} --count ${CLEANUP_KEEP_COUNT}
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+cleanup:preview:
+  extends: [.cleanup]
+  variables:
+    CLEANUP_ENVIRONMENT: "preview"
+    CLEANUP_KEEP_COUNT: 0
+
+cleanup:production:
+  extends: [.cleanup]
+  variables:
+    CLEANUP_ENVIRONMENT: "production"
+    CLEANUP_KEEP_COUNT: 2
